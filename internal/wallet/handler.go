@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/wey/gopher-wallet/internal/domain"
+	"github.com/wey/gopher-wallet/internal/middleware"
 )
 
 type Handler struct {
@@ -102,8 +103,12 @@ func (h *Handler) Transfer(c *fiber.Ctx) error {
 
 	result, err := h.transferSvc.Transfer(c.UserContext(), req)
 	if err != nil {
+		middleware.TransfersTotal.WithLabelValues("failed").Inc()
 		return h.handleTransferError(c, err)
 	}
+
+	middleware.TransfersTotal.WithLabelValues("success").Inc()
+	middleware.TransferAmountTotal.Add(float64(result.Amount))
 
 	return c.Status(fiber.StatusCreated).JSON(result)
 }

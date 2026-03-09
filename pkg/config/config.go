@@ -11,6 +11,18 @@ type Config struct {
 	DatabaseURL string
 	RedisURL    string
 	NatsURL     string
+
+	// Pool tuning
+	DBMaxConns    int32
+	DBMinConns    int32
+	RedisPoolSize int
+
+	// Resilience
+	RateLimit         int // max requests per minute per IP
+	RequestTimeoutSec int
+	CBMaxFailures     int // circuit breaker failure threshold
+	CBTimeoutSec      int // circuit breaker recovery timeout
+	WorkerPoolSize    int // notification worker pool size
 }
 
 func Load() *Config {
@@ -19,6 +31,16 @@ func Load() *Config {
 		DatabaseURL: getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/gopher_wallet?sslmode=disable"),
 		RedisURL:    getEnv("REDIS_URL", "localhost:6379"),
 		NatsURL:     getEnv("NATS_URL", "nats://localhost:4222"),
+
+		DBMaxConns:    int32(getEnvInt("DB_MAX_CONNS", 25)),
+		DBMinConns:    int32(getEnvInt("DB_MIN_CONNS", 5)),
+		RedisPoolSize: getEnvInt("REDIS_POOL_SIZE", 10),
+
+		RateLimit:         getEnvInt("RATE_LIMIT", 100),
+		RequestTimeoutSec: getEnvInt("REQUEST_TIMEOUT_SEC", 15),
+		CBMaxFailures:     getEnvInt("CB_MAX_FAILURES", 5),
+		CBTimeoutSec:      getEnvInt("CB_TIMEOUT_SEC", 30),
+		WorkerPoolSize:    getEnvInt("WORKER_POOL_SIZE", 4),
 	}
 }
 

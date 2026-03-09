@@ -2,29 +2,34 @@ package wallet
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
 	"github.com/wey/gopher-wallet/internal/domain"
+	"github.com/wey/gopher-wallet/internal/middleware"
+	"github.com/wey/gopher-wallet/internal/resilience"
 )
 
-// CachedAccountRepo wraps an AccountRepository with Redis caching.
-// It caches balance lookups to reduce database load under high traffic.
+// CachedAccountRepo wraps an AccountRepository with Redis caching and
+// a circuit breaker. When Redis is down, the circuit opens and requests
+// fall through directly to the database, preventing cascade failures.
 type CachedAccountRepo struct {
 	inner  domain.AccountRepository
 	rdb    *redis.Client
+	cb     *resilience.CircuitBreaker
 	ttl    time.Duration
 	logger *slog.Logger
 }
 
-func NewCachedAccountRepo(inner domain.AccountRepository, rdb *redis.Client, logger *slog.Logger) *CachedAccountRepo {
+func NewCachedAccountRepo(inner domain.AccountRepository, rdb *redis.Client, cb *resilience.CircuitBreaker, logger *slog.Logger) *CachedAccountRepo {
 	return &CachedAccountRepo{
 		inner:  inner,
 		rdb:    rdb,
+		cb:     cb,
 		ttl:    30 * time.Second,
 		logger: logger,
 	}
@@ -39,32 +44,39 @@ func (r *CachedAccountRepo) Create(ctx context.Context, account *domain.Account)
 }
 
 func (r *CachedAccountRepo) GetByID(ctx context.Context, id int64) (*domain.Account, error) {
-	// Try cache first
 	key := r.cacheKey(id)
-	val, err := r.rdb.Get(ctx, key+":balance").Result()
+
+	// Try cache first (protected by circuit breaker)
+	var account domain.Account
+	err := r.cb.Execute(func() error {
+		val, err := r.rdb.Get(ctx, key).Result()
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal([]byte(val), &account)
+	})
 	if err == nil {
-		// Cache hit — still need full account, but we can validate quickly
-		balance, _ := strconv.ParseInt(val, 10, 64)
-		account, dbErr := r.inner.GetByID(ctx, id)
-		if dbErr != nil {
-			return nil, dbErr
-		}
-		// Use cached balance if version matches
-		if account.Balance == balance {
-			r.logger.Debug("cache hit", "account_id", id)
-		}
-		return account, nil
+		middleware.CacheHitsTotal.Inc()
+		r.logger.Debug("cache hit", "account_id", id)
+		return &account, nil
 	}
 
-	// Cache miss — fetch from DB and cache
-	account, err := r.inner.GetByID(ctx, id)
+	middleware.CacheMissesTotal.Inc()
+
+	// Cache miss or circuit open — fetch from database
+	acc, err := r.inner.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	// Cache the balance
-	r.rdb.Set(ctx, key+":balance", strconv.FormatInt(account.Balance, 10), r.ttl)
-	return account, nil
+	// Cache the result (best effort)
+	if data, marshalErr := json.Marshal(acc); marshalErr == nil {
+		_ = r.cb.Execute(func() error {
+			return r.rdb.Set(ctx, key, data, r.ttl).Err()
+		})
+	}
+
+	return acc, nil
 }
 
 func (r *CachedAccountRepo) GetByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
@@ -83,6 +95,8 @@ func (r *CachedAccountRepo) UpdateBalance(ctx context.Context, tx domain.Transac
 	}
 
 	// Invalidate cache after balance update
-	r.rdb.Del(ctx, r.cacheKey(id)+":balance")
+	_ = r.cb.Execute(func() error {
+		return r.rdb.Del(ctx, r.cacheKey(id)).Err()
+	})
 	return nil
 }

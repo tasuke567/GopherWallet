@@ -9,6 +9,8 @@ import (
 
 	"github.com/wey/gopher-wallet/internal/domain"
 	"github.com/wey/gopher-wallet/internal/event"
+	"github.com/wey/gopher-wallet/internal/middleware"
+	"github.com/wey/gopher-wallet/internal/resilience"
 )
 
 type TransferRequest struct {
@@ -169,9 +171,13 @@ func (s *TransferService) Transfer(ctx context.Context, req TransferRequest) (*d
 		"amount", req.Amount,
 	)
 
-	// --- Publish event asynchronously (fire-and-forget) ---
+	// --- Publish event asynchronously with retry ---
 	if s.publisher != nil {
-		go s.publishTransferEvent(ctx, result)
+		go func() {
+			pubCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			s.publishTransferEvent(pubCtx, result)
+		}()
 	}
 
 	return result, nil
@@ -193,7 +199,14 @@ func (s *TransferService) publishTransferEvent(ctx context.Context, txn *domain.
 		return
 	}
 
-	if err := s.publisher.Publish(ctx, event.SubjectTransferCompleted, data); err != nil {
-		s.logger.Error("failed to publish transfer event", "error", err)
+	err = resilience.Retry(ctx, 3, 100*time.Millisecond, func() error {
+		return s.publisher.Publish(ctx, event.SubjectTransferCompleted, data)
+	})
+	if err != nil {
+		s.logger.Error("failed to publish transfer event after retries",
+			"error", err, "transaction_id", txn.ID)
+		middleware.EventPublishTotal.WithLabelValues("failed").Inc()
+		return
 	}
+	middleware.EventPublishTotal.WithLabelValues("success").Inc()
 }

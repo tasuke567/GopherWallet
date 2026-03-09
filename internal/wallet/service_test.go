@@ -2,9 +2,13 @@ package wallet_test
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"log/slog"
+	"math"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -275,4 +279,55 @@ func TestTransfer_ConcurrentTransfers(t *testing.T) {
 	sender, _ := accountRepo.GetByID(context.Background(), 1)
 	t.Logf("Sender final balance: %d", sender.Balance)
 	t.Logf("Errors: %d", len(errCh))
+}
+
+// --- Benchmarks ---
+
+func BenchmarkTransfer(b *testing.B) {
+	accountRepo := newMockAccountRepo()
+	txnRepo := newMockTxnRepo()
+	txManager := &mockTxManager{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	accountRepo.accounts[1] = &domain.Account{ID: 1, UserID: "user-a", Balance: math.MaxInt64, Currency: "THB", Version: 1}
+	accountRepo.accounts[2] = &domain.Account{ID: 2, UserID: "user-b", Balance: 0, Currency: "THB", Version: 1}
+
+	svc := wallet.NewTransferService(accountRepo, txnRepo, txManager, logger)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = svc.Transfer(context.Background(), wallet.TransferRequest{
+			FromAccountID:  1,
+			ToAccountID:    2,
+			Amount:         100,
+			IdempotencyKey: fmt.Sprintf("bench-%d", i),
+		})
+	}
+}
+
+func BenchmarkTransfer_Parallel(b *testing.B) {
+	accountRepo := newMockAccountRepo()
+	txnRepo := newMockTxnRepo()
+	txManager := &mockTxManager{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	accountRepo.accounts[1] = &domain.Account{ID: 1, UserID: "user-a", Balance: math.MaxInt64, Currency: "THB", Version: 1}
+	accountRepo.accounts[2] = &domain.Account{ID: 2, UserID: "user-b", Balance: 0, Currency: "THB", Version: 1}
+
+	svc := wallet.NewTransferService(accountRepo, txnRepo, txManager, logger)
+
+	var counter atomic.Int64
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			id := counter.Add(1)
+			_, _ = svc.Transfer(context.Background(), wallet.TransferRequest{
+				FromAccountID:  1,
+				ToAccountID:    2,
+				Amount:         100,
+				IdempotencyKey: fmt.Sprintf("bench-p-%d", id),
+			})
+		}
+	})
 }

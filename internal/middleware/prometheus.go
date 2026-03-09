@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -41,7 +42,57 @@ var (
 			Help: "Total amount transferred (in smallest currency unit)",
 		},
 	)
+
+	// Cache metrics
+	CacheHitsTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "gopher_wallet_cache_hits_total",
+			Help: "Total number of cache hits",
+		},
+	)
+
+	CacheMissesTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "gopher_wallet_cache_misses_total",
+			Help: "Total number of cache misses",
+		},
+	)
+
+	// Event publish metrics
+	EventPublishTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gopher_wallet_event_publish_total",
+			Help: "Total number of event publish attempts",
+		},
+		[]string{"status"},
+	)
+
+	// Circuit breaker metrics
+	CircuitBreakerState = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "gopher_wallet_circuit_breaker_state",
+			Help: "Current circuit breaker state (0=closed, 1=open, 2=half-open)",
+		},
+	)
 )
+
+// RegisterDBPoolMetrics exposes pgx connection pool statistics to Prometheus.
+func RegisterDBPoolMetrics(pool *pgxpool.Pool) {
+	promauto.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "gopher_wallet_db_pool_total_connections",
+		Help: "Total number of connections in the DB pool",
+	}, func() float64 { return float64(pool.Stat().TotalConns()) })
+
+	promauto.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "gopher_wallet_db_pool_idle_connections",
+		Help: "Number of idle connections in the DB pool",
+	}, func() float64 { return float64(pool.Stat().IdleConns()) })
+
+	promauto.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "gopher_wallet_db_pool_acquired_connections",
+		Help: "Number of acquired connections in the DB pool",
+	}, func() float64 { return float64(pool.Stat().AcquiredConns()) })
+}
 
 func PrometheusMiddleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
