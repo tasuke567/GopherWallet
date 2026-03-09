@@ -47,7 +47,7 @@ if [ "$METHOD" = "k6" ]; then
   echo "=== Running k6 load test ==="
   k6 run --env BASE_URL="$BASE_URL" loadtest/k6_transfer.js
 else
-  echo "=== Running hey load test ==="
+  echo "=== Running load test ==="
   echo ""
 
   echo "--- Test 1: Health endpoint (baseline) ---"
@@ -55,21 +55,11 @@ else
   echo ""
 
   echo "--- Test 2: Transfer - 500 requests, 20 concurrent ---"
-  for i in $(seq 1 500); do
-    echo "{\"from_account_id\":$ID1,\"to_account_id\":$ID2,\"amount\":100,\"idempotency_key\":\"hey-$RANDOM-$i\"}"
-  done > /tmp/hey_payloads.txt
-
-  hey -n 500 -c 20 -m POST \
-    -H "Content-Type: application/json" \
-    -d "{\"from_account_id\":$ID1,\"to_account_id\":$ID2,\"amount\":100,\"idempotency_key\":\"hey-run-$(date +%s)\"}" \
-    "$BASE_URL/api/v1/transfers"
+  go run ./loadtest/cmd "$ID1" "$ID2" 500 20
   echo ""
 
   echo "--- Test 3: Transfer - 1000 requests, 50 concurrent (stress) ---"
-  hey -n 1000 -c 50 -m POST \
-    -H "Content-Type: application/json" \
-    -d "{\"from_account_id\":$ID1,\"to_account_id\":$ID2,\"amount\":100,\"idempotency_key\":\"hey-stress-$(date +%s)\"}" \
-    "$BASE_URL/api/v1/transfers"
+  go run ./loadtest/cmd "$ID1" "$ID2" 1000 50
   echo ""
 
   echo "--- Test 4: Get Account (read performance) ---"

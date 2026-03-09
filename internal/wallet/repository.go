@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wey/gopher-wallet/internal/domain"
@@ -177,6 +178,10 @@ func (r *TransactionRepo) Create(ctx context.Context, tx domain.Transaction, txn
 		txn.Currency, txn.Status, txn.IdempotencyKey,
 	).Scan(&txn.ID, &txn.CreatedAt)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, domain.ErrDuplicateTransaction
+		}
 		return nil, fmt.Errorf("create transaction: %w", err)
 	}
 	return txn, nil
