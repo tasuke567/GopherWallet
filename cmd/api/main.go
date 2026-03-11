@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gofiber/adaptor/v2"
+	adaptor "github.com/gofiber/adaptor/v2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
